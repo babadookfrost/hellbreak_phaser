@@ -40,6 +40,8 @@ export class GameScene extends Phaser.Scene {
     private path: {x: number, y: number}[] = [];
     private lastPathCalcTime = 0;
     private pathRecalcInterval = 500; // Recalculate path every 500ms (game time)
+    private lastEnemyPosition = new Phaser.Math.Vector2(0, 0);
+    private stuckTimer = 0;
 
     constructor() {
         super('GameScene');
@@ -94,6 +96,9 @@ export class GameScene extends Phaser.Scene {
 
         this.enemy = this.physics.add.sprite(enemyX, enemyY, 'enemyTexture');
         this.enemy.setCollideWorldBounds(true);
+        if (this.enemy.body) {
+            this.enemy.body.setSize(28, 28);
+        }
         this.physics.add.collider(this.enemy, this.obstacles);
 
         // Setup Pathfinding
@@ -103,7 +108,7 @@ export class GameScene extends Phaser.Scene {
         // Allow diagonals if desired, though we'll keep it simple for now or enable it:
         this.easystar.enableDiagonals();
         // Since we enable diagonals, we should avoid corner clipping
-        this.easystar.enableCornerCutting();
+        this.easystar.disableCornerCutting();
 
         // Input setup (PC)
         if (this.input.keyboard) {
@@ -332,13 +337,35 @@ export class GameScene extends Phaser.Scene {
 
         // Move along the path
         if (this.path && this.path.length > 0) {
+            // Anti-stuck logic
+            this.stuckTimer += scaledDelta;
+            if (this.stuckTimer >= 250) {
+                const movedDist = Phaser.Math.Distance.Between(
+                    this.enemy.x, this.enemy.y,
+                    this.lastEnemyPosition.x, this.lastEnemyPosition.y
+                );
+
+                if (movedDist < 5) {
+                    // We are stuck, clear the path and wait for next recalc
+                    this.path = [];
+                    this.enemy.body.velocity.x = 0;
+                    this.enemy.body.velocity.y = 0;
+                    this.stuckTimer = 0;
+                    return;
+                }
+
+                // Reset stuck check
+                this.lastEnemyPosition.set(this.enemy.x, this.enemy.y);
+                this.stuckTimer = 0;
+            }
+
             const targetNode = this.path[0];
             const targetX = targetNode.x * this.TILE_SIZE + this.TILE_SIZE / 2;
             const targetY = targetNode.y * this.TILE_SIZE + this.TILE_SIZE / 2;
 
             const dist = Phaser.Math.Distance.Between(this.enemy.x, this.enemy.y, targetX, targetY);
 
-            if (dist < 15) { // Reached the node (increased threshold)
+            if (dist < 20) { // Reached the node (increased threshold to 20px)
                 this.path.shift(); // Remove reached node
 
                 // If path is empty, stop
