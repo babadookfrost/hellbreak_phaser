@@ -49,8 +49,11 @@ export class TitleScene extends Phaser.Scene {
         const spacing = 5;
         totalWidth += spacing * (titleText.length - 1);
 
-        const startX = 480 - totalWidth / 2;
-        const startY = 270;
+        const cx = this.cameras.main.centerX;
+        const cy = this.cameras.main.centerY;
+
+        const startX = cx - totalWidth / 2;
+        const startY = cy;
         let currentX = startX;
 
         // Create individual letter objects
@@ -122,8 +125,8 @@ export class TitleScene extends Phaser.Scene {
 
         tempText.destroy();
 
-        // Horror trailer reveal animation
-        const revealDuration = 6800; // Build up slightly before the boom at 6.8s
+        // Snappier intro animation independent of audio track timing
+        const revealDuration = 2500;
 
         // Fade in letters
         this.tweens.add({
@@ -132,10 +135,10 @@ export class TitleScene extends Phaser.Scene {
             scale: { from: 0.5, to: 1.1 },
             duration: revealDuration,
             ease: 'Sine.easeInOut',
-            delay: this.tweens.stagger(150, { start: 0 }), // Staggered appearance
+            delay: this.tweens.stagger(150, { start: 0 }),
             onComplete: () => {
-                // Boom happens around here, adding a shake/flicker effect
-                this.cameras.main.shake(300, 0.015);
+                // Simple camera shake at the end of the fast reveal
+                this.cameras.main.shake(300, 0.01);
 
                 // Add continuous subtle floating/scaling for eerie feel
                 this.tweens.add({
@@ -176,7 +179,7 @@ export class TitleScene extends Phaser.Scene {
         });
 
         // Click to start
-        const startText = this.add.text(480, 450, 'CLICK TO START', {
+        const startText = this.add.text(cx, cy + 180, 'CLICK TO START', {
             fontFamily: 'Arial',
             fontSize: '24px',
             color: '#ffffff'
@@ -194,6 +197,29 @@ export class TitleScene extends Phaser.Scene {
 
         this.input.once('pointerdown', () => {
             this.scene.start('GameScene');
+        });
+
+        // Ensure text stays centered on resize
+        this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
+            const width = gameSize.width;
+            const height = gameSize.height;
+
+            this.cameras.main.setSize(width, height);
+
+            const newCx = width / 2;
+            const newCy = height / 2;
+            const newStartX = newCx - totalWidth / 2;
+
+            let updateX = newStartX;
+            for (let i = 0; i < letters.length; i++) {
+                letters[i].setPosition(updateX + letterWidths[i] / 2, newCy);
+                if (emitters[i]) {
+                    emitters[i].setPosition(updateX + letterWidths[i] / 2, newCy + fontSize * 0.3);
+                }
+                updateX += letterWidths[i] + spacing;
+            }
+
+            startText.setPosition(newCx, newCy + 180);
         });
     }
 }

@@ -21,6 +21,7 @@ export class GameScene extends Phaser.Scene {
 
     // Time-freeze variables
     private isMoving = false;
+    private customTimeScale = 1.0;
     private targetTimeScale = 0.03;
 
     // Map and Generation variables
@@ -272,15 +273,10 @@ export class GameScene extends Phaser.Scene {
         return reachableEmpty === totalEmpty;
     }
 
-    update(_time: number, _delta: number) {
-        // We use the raw delta (unaffected by scene timeScale) or adjust it?
-        // Actually, Phaser's scene update `delta` is affected by `this.time.timeScale`.
-        // To get real unscaled delta for our lerp, we can use the game's loop raw delta.
-        const unscaledDelta = this.game.loop.delta;
-
+    update(_time: number, delta: number) {
         this.handlePlayerMovement();
-        this.handleTimeFreeze(unscaledDelta);
-        this.handleEnemyAI(unscaledDelta);
+        this.handleTimeFreeze(delta);
+        this.handleEnemyAI(delta);
     }
 
     private handlePlayerMovement() {
@@ -309,37 +305,20 @@ export class GameScene extends Phaser.Scene {
             inputY /= length;
         }
 
+        this.isMoving = (inputX !== 0 || inputY !== 0);
+
         if (this.player.body) {
-            // Note: Since we manipulate timeScale, we need to ensure the player's speed
-            // doesn't drop to zero just because physics time slows down, so they can keep moving.
-            // When timeScale is 0.03, if we give velocity 200, it moves at 200 * 0.03 = 6 px/s.
-            // To compensate and allow the player to move at normal speed while everything else is slow,
-            // we multiply the player's velocity by (1 / timeScale).
-            // However, we are changing timeScale based on player movement, so when player moves, timeScale approaches 1.
-
-            const currentTimeScale = this.physics.world.timeScale;
-            // The velocity needs to be adjusted so the player's movement feels independent of the world time scale.
-            // physics.world.timeScale affects how much position changes per frame: delta * timeScale * velocity
-            // So to maintain constant visual speed, we divide the desired velocity by timeScale.
-
-            // To prevent division by zero or extremely high values if timeScale gets too close to 0:
-            const safeTimeScale = Math.max(currentTimeScale, 0.01);
-
-            this.player.body.velocity.x = (inputX * this.playerSpeed) / safeTimeScale;
-            this.player.body.velocity.y = (inputY * this.playerSpeed) / safeTimeScale;
-
-            this.isMoving = (inputX !== 0 || inputY !== 0);
+            // Apply customTimeScale to player movement as well so they are affected by the time freeze
+            this.player.body.velocity.x = inputX * this.playerSpeed * this.customTimeScale;
+            this.player.body.velocity.y = inputY * this.playerSpeed * this.customTimeScale;
         }
     }
 
     private handleEnemyAI(unscaledDelta: number) {
         if (!this.enemy.body) return;
 
-        // Since timeScale slows down the game, the path recaluation timer should probably use unscaled delta
-        // or scaled delta? The requirement: "Таймер должен учитывать timeScale мира."
-        // So we use scene's delta which is affected by timeScale. Wait, to do that easily, we just accumulate `this.game.loop.delta * this.physics.world.timeScale`
-        // which roughly corresponds to game time elapsed.
-        const scaledDelta = unscaledDelta * this.physics.world.timeScale;
+        // The timer should consider the custom time scale
+        const scaledDelta = unscaledDelta * this.customTimeScale;
 
         this.lastPathCalcTime += scaledDelta;
 
@@ -359,7 +338,7 @@ export class GameScene extends Phaser.Scene {
 
             const dist = Phaser.Math.Distance.Between(this.enemy.x, this.enemy.y, targetX, targetY);
 
-            if (dist < 5) { // Reached the node
+            if (dist < 15) { // Reached the node (increased threshold)
                 this.path.shift(); // Remove reached node
 
                 // If path is empty, stop
@@ -372,14 +351,9 @@ export class GameScene extends Phaser.Scene {
                 // Move towards current node
                 const angle = Phaser.Math.Angle.Between(this.enemy.x, this.enemy.y, targetX, targetY);
 
-                // Again, scale velocity by (1 / timeScale) to keep real movement speed constant
-                // wait, if enemy's velocity is scaled by 1/timeScale, it means it moves at full speed ALWAYS.
-                // Should the enemy slow down when time freezes? Yes! "Влияет ли замедление времени на скорость отклика управления? Обычно управление (инпуты) должно работать в реальном времени, а timeScale применять замедление только к физике и игровым таймерам"
-                // If time slows down, physics time slows down, so normal velocity will be visually slower.
-                // We DON'T scale enemy velocity by 1/timeScale. We just set it normally.
-
-                this.enemy.body.velocity.x = Math.cos(angle) * this.enemySpeed;
-                this.enemy.body.velocity.y = Math.sin(angle) * this.enemySpeed;
+                // Apply customTimeScale to enemy velocity
+                this.enemy.body.velocity.x = Math.cos(angle) * this.enemySpeed * this.customTimeScale;
+                this.enemy.body.velocity.y = Math.sin(angle) * this.enemySpeed * this.customTimeScale;
             }
         } else {
             // No path, stop
@@ -395,44 +369,9 @@ export class GameScene extends Phaser.Scene {
         const ex = Math.floor(this.enemy.x / this.TILE_SIZE);
         const ey = Math.floor(this.enemy.y / this.TILE_SIZE);
 
-        // "Strategic" AI: Target cell is slightly offset from player based on player's velocity or position
-        let targetGridX = Math.floor(this.player.x / this.TILE_SIZE);
-        let targetGridY = Math.floor(this.player.y / this.TILE_SIZE);
-
-        // Distance in tiles
-        const distTiles = Phaser.Math.Distance.Between(ex, ey, targetGridX, targetGridY);
-
-        if (distTiles > 3) {
-            // If far enough, try to predict/offset
-            let offsetX = 0;
-            let offsetY = 0;
-
-            if (this.player.body && this.isMoving) {
-                // Offset in direction of player movement
-                offsetX = Math.sign(this.player.body.velocity.x) * 2;
-                offsetY = Math.sign(this.player.body.velocity.y) * 2;
-            } else {
-                // Offset to the side of the direct line of sight (just some "flanking" logic)
-                // Pick a pseudo-random perpendicular direction
-                const dx = targetGridX - ex;
-                const dy = targetGridY - ey;
-
-                if (Math.abs(dx) > Math.abs(dy)) {
-                    offsetY = (Math.random() > 0.5 ? 1 : -1) * 2;
-                } else {
-                    offsetX = (Math.random() > 0.5 ? 1 : -1) * 2;
-                }
-            }
-
-            // Ensure offset is within bounds and reachable
-            const testX = Phaser.Math.Clamp(targetGridX + offsetX, 1, this.gridWidth - 2);
-            const testY = Phaser.Math.Clamp(targetGridY + offsetY, 1, this.gridHeight - 2);
-
-            if (this.grid[testY][testX] === 0) {
-                targetGridX = testX;
-                targetGridY = testY;
-            }
-        }
+        // The AI targets the player's direct cell instead of flanking
+        const targetGridX = Math.floor(this.player.x / this.TILE_SIZE);
+        const targetGridY = Math.floor(this.player.y / this.TILE_SIZE);
 
         this.easystar.findPath(ex, ey, targetGridX, targetGridY, (path) => {
             if (path) {
@@ -449,19 +388,12 @@ export class GameScene extends Phaser.Scene {
         // Target scale: 1.0 if moving, 0.03 if standing still
         this.targetTimeScale = this.isMoving ? 1.0 : 0.03;
 
-        const currentScale = this.physics.world.timeScale;
-
-        // Use an independent time delta for lerping time scale so it doesn't get stuck when time is slow
         // delta is in ms, we want transition to take ~200ms (0.2s)
-        // Lerp factor = delta / transitionTime
         const lerpFactor = Math.min(delta / 200, 1.0);
 
-        let newScale = Phaser.Math.Linear(currentScale, this.targetTimeScale, lerpFactor);
+        let newScale = Phaser.Math.Linear(this.customTimeScale, this.targetTimeScale, lerpFactor);
 
         // Apply clamp to avoid floating point issues
-        newScale = Phaser.Math.Clamp(newScale, 0.03, 1.0);
-
-        this.physics.world.timeScale = newScale;
-        this.time.timeScale = newScale;
+        this.customTimeScale = Phaser.Math.Clamp(newScale, 0.03, 1.0);
     }
 }
